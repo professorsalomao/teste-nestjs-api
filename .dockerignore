@@ -4,7 +4,4 @@ coverage
 .git
 .github
 .aws
-.env
-.env.*
-!.env.example
 *.log
