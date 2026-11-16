@@ -1,7 +1,7 @@
-import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app/app.module";
-import { ValidationPipe } from "@nestjs/common";
-import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app/app.module';
+import { ValidationPipe } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -17,22 +17,16 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-    .setTitle("API DevOps")
-    .setDescription("API desenvolvida em aula da matéria de DevOps")
-    .setVersion("1.0")
-    .addTag("Manufacturer", "Gestão de dados de fabricante")
+    .setTitle('API DevOps')
+    .setDescription('API desenvolvida em aula da matéria de DevOps')
+    .setVersion('1.0')
+    .addTag('Manufacturer', 'Gestão de dados de fabricante')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
 
-  SwaggerModule.setup("swagger", app, document);
+  SwaggerModule.setup('swagger', app, document);
 
-  const port = Number(process.env.PORT ?? 3005);
-
-  await app.listen(port, "0.0.0.0");
+  await app.listen(Number(process.env.PORT) ?? 3001);
 }
-
-bootstrap().catch((error: unknown) => {
-  console.error("Error starting application:", error);
-  process.exit(1);
-});
+bootstrap();
