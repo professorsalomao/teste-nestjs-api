@@ -27,6 +27,12 @@ async function bootstrap() {
 
   SwaggerModule.setup("swagger", app, document);
 
-  await app.listen(Number(process.env.PORT) ?? 3005);
+  const port = Number(process.env.PORT ?? 3005);
+
+  await app.listen(port, "0.0.0.0");
 }
-bootstrap();
+
+bootstrap().catch((error: unknown) => {
+  console.error("Error starting application:", error);
+  process.exit(1);
+});
