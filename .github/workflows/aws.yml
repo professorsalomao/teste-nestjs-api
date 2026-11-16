@@ -133,6 +133,60 @@ jobs:
           echo "Configuration validated successfully."
 
       # ==================================================
+      # DIAGNOSTICO OIDC
+      # ==================================================
+
+      - name: Debug OIDC configuration
+        shell: bash
+        run: |
+          node <<'EOF'
+          (async () => {
+            const url = new URL(
+              process.env.ACTIONS_ID_TOKEN_REQUEST_URL
+            );
+
+            url.searchParams.set(
+              'audience',
+              'sts.amazonaws.com'
+            );
+
+            const response = await fetch(url, {
+              headers: {
+                Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}`
+              }
+            });
+
+            if (!response.ok) {
+              throw new Error(`OIDC request failed: ${response.status}`);
+            }
+
+            const { value } = await response.json();
+
+            const claims = JSON.parse(
+              Buffer.from(
+                value.split('.')[1],
+                'base64url'
+              ).toString()
+            );
+
+            console.log(JSON.stringify({
+              iss: claims.iss,
+              aud: claims.aud,
+              sub: claims.sub,
+              repository: claims.repository,
+              repository_id: claims.repository_id,
+              repository_owner_id: claims.repository_owner_id,
+              environment: claims.environment,
+              ref: claims.ref
+            }, null, 2));
+
+          })().catch(error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          EOF
+
+      # ==================================================
       # AUTENTICACAO AWS VIA OIDC
       # ==================================================
 
@@ -141,6 +195,9 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+          role-session-name: GitHubActions
+          retry-max-attempts: 3
 
       - name: Verify AWS authentication
         run: aws sts get-caller-identity
