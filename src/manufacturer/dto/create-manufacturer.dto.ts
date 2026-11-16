@@ -2,7 +2,13 @@ import { Transform } from 'class-transformer';
 import { IsBoolean, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
 export class CreateManufacturerDto {
-  @Transform(({ value }) => value.toUpperCase())
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value.toUpperCase();
+    }
+
+    return value as unknown;
+  })
   @IsString({ message: 'campo name deve ser uma string' })
   @MaxLength(255)
   @IsNotEmpty()

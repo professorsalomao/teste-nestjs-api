@@ -35,8 +35,7 @@ export class ManufacturerService {
       ...createManufacturerDto,
     };
 
-    const manufacturer =
-      await this.manufacturerRepository.create(newManufacturer);
+    const manufacturer = this.manufacturerRepository.create(newManufacturer);
 
     return this.manufacturerRepository.save(manufacturer);
   }
@@ -55,6 +54,6 @@ export class ManufacturerService {
   async remove(id: number) {
     const manufacturer = await this.findOne(id);
 
-    return await this.manufacturerRepository.remove(manufacturer);
+    return this.manufacturerRepository.remove(manufacturer);
   }
 }

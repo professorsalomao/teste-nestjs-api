@@ -7,7 +7,7 @@ import {
   Delete,
   Put,
 } from '@nestjs/common';
-import { ApiTags, ApiBody } from '@nestjs/swagger';
+import { ApiBody, ApiTags } from '@nestjs/swagger';
 import { ManufacturerService } from './manufacturer.service';
 import { CreateManufacturerDto } from './dto/create-manufacturer.dto';
 import { UpdateManufacturerDto } from './dto/update-manufacturer.dto';
@@ -28,8 +28,9 @@ export class ManufacturerController {
   }
 
   @Post()
+  @ApiBody({ type: CreateManufacturerDto })
   async create(@Body() createManufacturerDto: CreateManufacturerDto) {
-    return await this.manufacturerService.create(createManufacturerDto);
+    return this.manufacturerService.create(createManufacturerDto);
   }
 
   @Put(':id')

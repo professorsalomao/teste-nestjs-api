@@ -30,14 +30,11 @@ import { S3Module } from 'src/s3/s3.module';
       ssl: (() => {
         const caPath = path.resolve(
           process.cwd(),
-          process.env.DB_SSL_CA_PATH ??
-            './certs/global-bundle.pem',
+          process.env.DB_SSL_CA_PATH ?? './certs/global-bundle.pem',
         );
 
         if (!fs.existsSync(caPath)) {
-          throw new Error(
-            `Certificado SSL não encontrado: ${caPath}`,
-          );
+          throw new Error(`Certificado SSL não encontrado: ${caPath}`);
         }
 
         return {

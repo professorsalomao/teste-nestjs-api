@@ -7,5 +7,4 @@ import { S3Controller } from './s3.controller';
   providers: [S3Service],
   exports: [S3Service],
 })
-
 export class S3Module {}
