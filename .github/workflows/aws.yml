@@ -22,6 +22,7 @@ permissions:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
   ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
   ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
   ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
@@ -110,7 +111,7 @@ jobs:
 
       - name: Validate configuration
         env:
-          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_ROLE_ARN: ${{ env.AWS_ROLE_ARN }}
         run: |
           for VAR in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY ECS_CLUSTER ECS_SERVICE ECS_TASK_DEFINITION CONTAINER_NAME; do
             if [ -z "${!VAR}" ]; then
@@ -138,7 +139,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify AWS authentication
