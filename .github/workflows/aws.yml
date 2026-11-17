@@ -1,95 +1,87 @@
-name: CI/CD - Deploy NestJS API to Amazon ECS
 
-# ==================================================
-# GATILHOS DA PIPELINE
-# ==================================================
+name: AWS CI/CD - NestJS
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
 
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# ==================================================
-# VARIAVEIS DE AMBIENTE
-# ==================================================
-
-env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
-  ECS_TASK_DEFINITION: ${{ secrets.ECS_TASK_DEFINITION }}
-  CONTAINER_NAME: ${{ secrets.CONTAINER_NAME }}
-
 jobs:
-  # ==================================================
+
+  # ==========================================================
   # CI - CONTINUOUS INTEGRATION
-  # ==================================================
+  # ==========================================================
 
   ci:
-    name: Continuous Integration
+    name: CI - Continuous Integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
+
+      # Download do código-fonte
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      # Configuração do Node.js
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24'
           cache: npm
 
+      # Instalação das dependências
       - name: Install dependencies
         run: npm ci
 
-      # Temporariamente permite erros de lint
-      # durante a validacao da infraestrutura AWS.
+      # Validação da qualidade do código
       - name: Run lint
         run: npm run lint
         continue-on-error: true
 
-      - name: Run unit tests
-        id: unit-tests
+      # Execução dos testes automatizados
+      - name: Run tests
         run: npm test -- --ci --coverage --passWithNoTests
 
+      # Compilação da aplicação NestJS
       - name: Build application
         run: npm run build
 
-      - name: Upload coverage report
+      # Armazenamento do relatório de cobertura
+      - name: Upload test coverage
         if: always() && hashFiles('coverage/**') != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: coverage
+          name: test-coverage
+          path: coverage/
           retention-days: 7
           if-no-files-found: ignore
 
-  # ==================================================
+  # ==========================================================
   # CD - CONTINUOUS DEPLOYMENT
-  # ==================================================
+  # ==========================================================
 
   deploy:
-    name: Continuous Deployment
-
+    name: CD - Deploy to Amazon ECS
     needs: ci
 
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
 
     runs-on: ubuntu-24.04
-    environment: production
     timeout-minutes: 30
+
+    environment: production
 
     concurrency:
       group: ecs-production
@@ -99,96 +91,172 @@ jobs:
       contents: read
       id-token: write
 
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+      ECS_TASK_DEFINITION: ${{ secrets.ECS_TASK_DEFINITION }}
+      CONTAINER_NAME: ${{ secrets.CONTAINER_NAME }}
+
     steps:
+
+      # ======================================================
+      # 1. DOWNLOAD DO CÓDIGO-FONTE
+      # ======================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      # ==================================================
-      # VALIDAR CONFIGURACOES
-      # ==================================================
+      # ======================================================
+      # 2. VALIDAÇÃO DAS CONFIGURAÇÕES
+      # ======================================================
 
       - name: Validate configuration
-        env:
-          AWS_ROLE_ARN: ${{ env.AWS_ROLE_ARN }}
+        shell: bash
         run: |
-          for VAR in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY ECS_CLUSTER ECS_SERVICE ECS_TASK_DEFINITION CONTAINER_NAME; do
-            if [ -z "${!VAR}" ]; then
-              echo "::error::Variable $VAR is not configured."
+          set -euo pipefail
+
+          REQUIRED_VARS=(
+            AWS_REGION
+            AWS_ROLE_ARN
+            ECR_REPOSITORY
+            ECS_CLUSTER
+            ECS_SERVICE
+            ECS_TASK_DEFINITION
+            CONTAINER_NAME
+          )
+
+          for VARIABLE in "${REQUIRED_VARS[@]}"; do
+            if [ -z "${!VARIABLE:-}" ]; then
+              echo "::error::Missing configuration: $VARIABLE"
               exit 1
             fi
           done
 
           if [ ! -f "$ECS_TASK_DEFINITION" ]; then
-            echo "::error::Task definition file not found."
+            echo "::error::Task definition file not found"
             exit 1
           fi
 
-          if [ ! -f Dockerfile ]; then
-            echo "::error::Dockerfile not found."
+          if [ ! -f "Dockerfile" ]; then
+            echo "::error::Dockerfile not found"
             exit 1
           fi
+
+          jq empty "$ECS_TASK_DEFINITION"
 
           echo "Configuration validated successfully."
 
-      # ==================================================
-      # DIAGNOSTICO OIDC
-      # ==================================================
+      # ======================================================
+      # 3. VALIDAÇÃO DO POSTGRESQL
+      # ======================================================
 
-      - name: Debug OIDC configuration
+      - name: Validate PostgreSQL configuration
         shell: bash
         run: |
-          node <<'EOF'
-          (async () => {
-            const url = new URL(
-              process.env.ACTIONS_ID_TOKEN_REQUEST_URL
-            );
+          set -euo pipefail
 
-            url.searchParams.set(
-              'audience',
-              'sts.amazonaws.com'
-            );
+          REQUIRED_ENV=(
+            PORT
+            POSTGRES_HOST
+            POSTGRES_PORT
+            POSTGRES_USER
+            POSTGRES_DB
+            DB_SSL_CA_PATH
+            DB_SSL_REJECT_UNAUTHORIZED
+            AWS_REGION
+            AWS_S3_BUCKET
+          )
 
-            const response = await fetch(url, {
-              headers: {
-                Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}`
-              }
-            });
+          for VARIABLE in "${REQUIRED_ENV[@]}"; do
 
-            if (!response.ok) {
-              throw new Error(`OIDC request failed: ${response.status}`);
-            }
+            if ! jq -e \
+              --arg container "$CONTAINER_NAME" \
+              --arg variable "$VARIABLE" \
+              '
+                any(
+                  .containerDefinitions[];
+                  .name == $container and
+                  any(
+                    .environment[]?;
+                    .name == $variable and
+                    ((.value // "") | length > 0)
+                  )
+                )
+              ' "$ECS_TASK_DEFINITION" > /dev/null; then
 
-            const { value } = await response.json();
+              echo "::error::Missing environment variable: $VARIABLE"
+              exit 1
 
-            const claims = JSON.parse(
-              Buffer.from(
-                value.split('.')[1],
-                'base64url'
-              ).toString()
-            );
+            fi
 
-            console.log(JSON.stringify({
-              iss: claims.iss,
-              aud: claims.aud,
-              sub: claims.sub,
-              repository: claims.repository,
-              repository_id: claims.repository_id,
-              repository_owner_id: claims.repository_owner_id,
-              environment: claims.environment,
-              ref: claims.ref
-            }, null, 2));
+          done
 
-          })().catch(error => {
-            console.error(error.message);
-            process.exit(1);
-          });
-          EOF
+          DB_HOST=$(jq -r \
+            --arg container "$CONTAINER_NAME" \
+            '
+              .containerDefinitions[]
+              | select(.name == $container)
+              | .environment[]
+              | select(.name == "POSTGRES_HOST")
+              | .value
+            ' "$ECS_TASK_DEFINITION")
 
-      # ==================================================
-      # AUTENTICACAO AWS VIA OIDC
-      # ==================================================
+          case "$DB_HOST" in
+            localhost|127.0.0.1|0.0.0.0|::1)
+              echo "::error::POSTGRES_HOST cannot point to localhost"
+              exit 1
+              ;;
+          esac
+
+          if ! jq -e \
+            --arg container "$CONTAINER_NAME" \
+            '
+              any(
+                .containerDefinitions[];
+                .name == $container and
+                any(
+                  .secrets[]?;
+                  .name == "POSTGRES_PASS" and
+                  ((.valueFrom // "") | length > 0)
+                )
+              )
+            ' "$ECS_TASK_DEFINITION" > /dev/null; then
+
+            echo "::error::POSTGRES_PASS secret is missing"
+            exit 1
+
+          fi
+
+          if jq -e \
+            --arg container "$CONTAINER_NAME" \
+            '
+              any(
+                .containerDefinitions[];
+                .name == $container and
+                any(.environment[]?; .name == "POSTGRES_PASS")
+              )
+            ' "$ECS_TASK_DEFINITION" > /dev/null; then
+
+            echo "::error::POSTGRES_PASS must not be stored as plain text"
+            exit 1
+
+          fi
+
+          if [ ! -s "certs/global-bundle.pem" ]; then
+            echo "::error::RDS SSL certificate not found"
+            exit 1
+          fi
+
+          echo "PostgreSQL configuration validated successfully."
+
+      # ======================================================
+      # 4. AUTENTICAÇÃO NA AWS VIA OIDC
+      # ======================================================
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -199,35 +267,47 @@ jobs:
           role-session-name: GitHubActions
           retry-max-attempts: 3
 
-      - name: Verify AWS authentication
+      # ======================================================
+      # 5. VALIDAR AUTENTICAÇÃO AWS
+      # ======================================================
+
+      - name: Validate AWS identity
         run: aws sts get-caller-identity
 
-      # ==================================================
-      # LOGIN NO AMAZON ECR
-      # ==================================================
+      # ======================================================
+      # 6. AUTENTICAÇÃO NO AMAZON ECR
+      # ======================================================
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ==================================================
-      # BUILD E PUBLICACAO DA IMAGEM DOCKER
-      # ==================================================
+      # ======================================================
+      # 7. BUILD E PUBLICAÇÃO DA IMAGEM DOCKER
+      # ======================================================
 
-      - name: Build, tag and push Docker image
+      - name: Build and push Docker image
         id: build-image
+        shell: bash
+
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
         run: |
+          set -euo pipefail
+
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
           echo "Building Docker image..."
-          echo "Image: $IMAGE"
 
-          docker build -t "$IMAGE" .
+          docker build \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$IMAGE" \
+            .
 
-          echo "Publishing Docker image..."
+          echo "Publishing Docker image to Amazon ECR..."
 
           docker push "$IMAGE"
 
@@ -235,70 +315,133 @@ jobs:
 
           echo "Docker image published successfully."
 
-      # ==================================================
-      # ATUALIZAR TASK DEFINITION
-      # ==================================================
+      # ======================================================
+      # 8. PREPARAR A NOVA TASK DEFINITION
+      # ======================================================
 
-      - name: Render ECS task definition
-        id: task-definition
+      - name: Render Amazon ECS task definition
+        id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: ${{ env.ECS_TASK_DEFINITION }}
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build-image.outputs.image }}
 
-      # ==================================================
-      # DEPLOY NO AMAZON ECS
-      # ==================================================
+      # ======================================================
+      # 9. REGISTRAR A REVISÃO E ATUALIZAR O SERVIÇO ECS
+      # ======================================================
 
-      - name: Deploy to Amazon ECS
+      - name: Deploy Amazon ECS task definition
         id: deploy-ecs
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.task-definition.outputs.task-definition }}
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
+          wait-for-minutes: 20
 
-      # ==================================================
-      # VALIDAR DEPLOY
-      # ==================================================
+      # ======================================================
+      # 10. VALIDAR A REVISÃO IMPLANTADA
+      # ======================================================
 
-      - name: Verify deployed task definition
+      - name: Verify deployed revision
+        id: verify-deployment
+        shell: bash
+
         env:
-          EXPECTED_TASK: ${{ steps.deploy-ecs.outputs.task-definition-arn }}
+          EXPECTED_TASK_DEFINITION: ${{ steps.deploy-ecs.outputs.task-definition-arn }}
+
         run: |
-          CURRENT_TASK=$(aws ecs describe-services \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE" \
-            --query "services[0].taskDefinition" \
-            --output text)
+          set -euo pipefail
 
-          echo "Expected task: $EXPECTED_TASK"
-          echo "Current task: $CURRENT_TASK"
-
-          if [ -z "$EXPECTED_TASK" ] || [ "$CURRENT_TASK" != "$EXPECTED_TASK" ]; then
-            echo "::error::Unexpected task definition."
+          if [ -z "$EXPECTED_TASK_DEFINITION" ]; then
+            echo "::error::Expected task definition ARN is missing"
             exit 1
           fi
 
-          echo "Task definition successfully deployed."
+          SERVICE_INFO=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --output json)
 
-      # ==================================================
-      # RESUMO DA PUBLICACAO
-      # ==================================================
+          CURRENT_TASK_DEFINITION=$(echo "$SERVICE_INFO" | \
+            jq -r '.services[0].taskDefinition // empty')
+
+          RUNNING_COUNT=$(echo "$SERVICE_INFO" | \
+            jq -r '.services[0].runningCount // 0')
+
+          DESIRED_COUNT=$(echo "$SERVICE_INFO" | \
+            jq -r '.services[0].desiredCount // 0')
+
+          ROLLOUT_STATE=$(echo "$SERVICE_INFO" | \
+            jq -r '
+              .services[0].deployments[]
+              | select(.status == "PRIMARY")
+              | .rolloutState // "UNKNOWN"
+            ')
+
+          if [ "$CURRENT_TASK_DEFINITION" != "$EXPECTED_TASK_DEFINITION" ]; then
+            echo "::error::The expected task definition is not active. Possible rollback."
+            exit 1
+          fi
+
+          if [ "$RUNNING_COUNT" -ne "$DESIRED_COUNT" ] || \
+             [ "$RUNNING_COUNT" -lt 1 ]; then
+            echo "::error::ECS service is not stable"
+            exit 1
+          fi
+
+          if [ "$ROLLOUT_STATE" != "COMPLETED" ]; then
+            echo "::error::ECS deployment was not completed"
+            exit 1
+          fi
+
+          echo "task_definition=$CURRENT_TASK_DEFINITION" >> "$GITHUB_OUTPUT"
+          echo "running_count=$RUNNING_COUNT" >> "$GITHUB_OUTPUT"
+          echo "rollout_state=$ROLLOUT_STATE" >> "$GITHUB_OUTPUT"
+
+          echo "Deployment validated successfully."
+
+      # ======================================================
+      # 11. GERAR RESUMO DA IMPLANTAÇÃO
+      # ======================================================
 
       - name: Deployment summary
+        if: always()
+        shell: bash
+
         env:
-          DEPLOYED_IMAGE: ${{ steps.build-image.outputs.image }}
+          JOB_STATUS: ${{ job.status }}
+          IMAGE_URI: ${{ steps.build-image.outputs.image }}
+          TASK_DEFINITION_ARN: ${{ steps.verify-deployment.outputs.task_definition }}
+          RUNNING_COUNT: ${{ steps.verify-deployment.outputs.running_count }}
+
         run: |
-          echo "## Deployment successfully completed" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Configuration | Value |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| AWS Region | $AWS_REGION |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ECS Cluster | $ECS_CLUSTER |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ECS Service | $ECS_SERVICE |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Container | $CONTAINER_NAME |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Docker Image | $DEPLOYED_IMAGE |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Commit | $GITHUB_SHA |" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## AWS CI/CD - NestJS"
+            echo ""
+            echo "| Configuration | Value |"
+            echo "| --- | --- |"
+            echo "| Status | $JOB_STATUS |"
+            echo "| Branch | ${{ github.ref_name }} |"
+            echo "| Commit | ${{ github.sha }} |"
+            echo "| Region | $AWS_REGION |"
+            echo "| ECR Repository | $ECR_REPOSITORY |"
+            echo "| ECS Cluster | $ECS_CLUSTER |"
+            echo "| ECS Service | $ECS_SERVICE |"
+            echo "| Docker Image | ${IMAGE_URI:-Not published} |"
+            echo "| Task Definition | ${TASK_DEFINITION_ARN:-Not validated} |"
+            echo "| Running Tasks | ${RUNNING_COUNT:-Not validated} |"
+            echo "| Environment | production |"
+            echo ""
+
+            if [ "$JOB_STATUS" = "success" ]; then
+              echo "### Deployment completed successfully."
+            else
+              echo "### Deployment failed."
+              echo "Check the GitHub Actions and Amazon CloudWatch logs."
+            fi
+
+          } >> "$GITHUB_STEP_SUMMARY"
