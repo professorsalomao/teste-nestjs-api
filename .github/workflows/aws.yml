@@ -341,6 +341,7 @@ jobs:
           wait-for-service-stability: true
           wait-for-minutes: 20
 
+      
       # ======================================================
       # 10. VALIDAR A REVISÃO IMPLANTADA
       # ======================================================
@@ -360,49 +361,86 @@ jobs:
             exit 1
           fi
 
-          SERVICE_INFO=$(aws ecs describe-services \
+          MAX_ATTEMPTS=40
+          WAIT_SECONDS=15
+
+          for ((ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++)); do
+
+            echo "Checking deployment: $ATTEMPT/$MAX_ATTEMPTS"
+
+            SERVICE_INFO=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE" \
+              --region "$AWS_REGION" \
+              --output json)
+
+            CURRENT_TASK_DEFINITION=$(echo "$SERVICE_INFO" | \
+              jq -r '.services[0].taskDefinition // empty')
+
+            RUNNING_COUNT=$(echo "$SERVICE_INFO" | \
+              jq -r '.services[0].runningCount // 0')
+
+            DESIRED_COUNT=$(echo "$SERVICE_INFO" | \
+              jq -r '.services[0].desiredCount // 0')
+
+            PENDING_COUNT=$(echo "$SERVICE_INFO" | \
+              jq -r '.services[0].pendingCount // 0')
+
+            ROLLOUT_STATE=$(echo "$SERVICE_INFO" | \
+              jq -r '
+                .services[0].deployments[]
+                | select(.status == "PRIMARY")
+                | .rolloutState // "UNKNOWN"
+              ')
+
+            echo "Expected task: $EXPECTED_TASK_DEFINITION"
+            echo "Current task: $CURRENT_TASK_DEFINITION"
+            echo "Rollout state: $ROLLOUT_STATE"
+            echo "Running tasks: $RUNNING_COUNT"
+            echo "Desired tasks: $DESIRED_COUNT"
+            echo "Pending tasks: $PENDING_COUNT"
+
+            if [ "$CURRENT_TASK_DEFINITION" != "$EXPECTED_TASK_DEFINITION" ]; then
+              echo "::error::Unexpected task definition. Possible rollback."
+              exit 1
+            fi
+
+            if [ "$ROLLOUT_STATE" = "FAILED" ]; then
+              echo "::error::ECS deployment failed"
+              exit 1
+            fi
+
+            if [ "$ROLLOUT_STATE" = "COMPLETED" ] && \
+               [ "$RUNNING_COUNT" -eq "$DESIRED_COUNT" ] && \
+               [ "$RUNNING_COUNT" -gt 0 ] && \
+               [ "$PENDING_COUNT" -eq 0 ]; then
+
+              echo "task_definition=$CURRENT_TASK_DEFINITION" >> "$GITHUB_OUTPUT"
+              echo "running_count=$RUNNING_COUNT" >> "$GITHUB_OUTPUT"
+              echo "rollout_state=$ROLLOUT_STATE" >> "$GITHUB_OUTPUT"
+
+              echo "Deployment validated successfully."
+              exit 0
+
+            fi
+
+            if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Waiting ${WAIT_SECONDS} seconds..."
+              sleep "$WAIT_SECONDS"
+            fi
+
+          done
+
+          echo "::error::Timeout waiting for ECS deployment"
+
+          aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE" \
             --region "$AWS_REGION" \
-            --output json)
+            --query 'services[0].events[0:10]' \
+            --output table
 
-          CURRENT_TASK_DEFINITION=$(echo "$SERVICE_INFO" | \
-            jq -r '.services[0].taskDefinition // empty')
-
-          RUNNING_COUNT=$(echo "$SERVICE_INFO" | \
-            jq -r '.services[0].runningCount // 0')
-
-          DESIRED_COUNT=$(echo "$SERVICE_INFO" | \
-            jq -r '.services[0].desiredCount // 0')
-
-          ROLLOUT_STATE=$(echo "$SERVICE_INFO" | \
-            jq -r '
-              .services[0].deployments[]
-              | select(.status == "PRIMARY")
-              | .rolloutState // "UNKNOWN"
-            ')
-
-          if [ "$CURRENT_TASK_DEFINITION" != "$EXPECTED_TASK_DEFINITION" ]; then
-            echo "::error::The expected task definition is not active. Possible rollback."
-            exit 1
-          fi
-
-          if [ "$RUNNING_COUNT" -ne "$DESIRED_COUNT" ] || \
-             [ "$RUNNING_COUNT" -lt 1 ]; then
-            echo "::error::ECS service is not stable"
-            exit 1
-          fi
-
-          if [ "$ROLLOUT_STATE" != "COMPLETED" ]; then
-            echo "::error::ECS deployment was not completed"
-            exit 1
-          fi
-
-          echo "task_definition=$CURRENT_TASK_DEFINITION" >> "$GITHUB_OUTPUT"
-          echo "running_count=$RUNNING_COUNT" >> "$GITHUB_OUTPUT"
-          echo "rollout_state=$ROLLOUT_STATE" >> "$GITHUB_OUTPUT"
-
-          echo "Deployment validated successfully."
+          exit 1"
 
       # ======================================================
       # 11. GERAR RESUMO DA IMPLANTAÇÃO
