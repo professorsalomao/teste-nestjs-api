@@ -5,4 +5,8 @@ export class AppService {
   getHello(): string {
     return 'Olá alunos!';
   }
+
+  getCidi(): string {
+    return 'Implementado CI/CD';
+  }
 }
